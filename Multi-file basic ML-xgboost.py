@@ -111,3 +111,19 @@ for i, file_name in enumerate(file_list):
 print("\n=======================================================")
 print(f"PIPELINE COMPLETE! Final model saved safely as: {model_save_path}")
 print("=======================================================")
+
+
+
+import matplotlib.pyplot as plt
+from xgboost import plot_importance
+
+# Use XGBoost plot_importance function to identify which features have the most significant impact on the model’s predictions.
+
+fig, ax = plt.subplots(figsize=(10, 6))
+plot_importance(model, ax=ax)
+plt.title('Feature Importance for XGBoost Model')
+plt.xlabel('Importance Score')
+plt.ylabel('Features')
+plt.show()
+
+
