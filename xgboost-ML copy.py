@@ -11,8 +11,26 @@ from sklearn.metrics import classification_report, confusion_matrix
 # =========================================================
 file_list = [
     '40906960_gen_001.i3.zst.h5',
-    # '40906960_gen_002.i3.zst.h5',  <-- Just uncomment and add more when you download them
-    # '40906960_gen_003.i3.zst.h5'
+    '40906960_gen_002.i3.zst.h5',
+    '40906960_gen_003.i3.zst.h5',
+    '40906960_gen_004.i3.zst.h5',
+    '40906960_gen_005.i3.zst.h5',
+    '40906960_gen_006.i3.zst.h5',
+    '40906960_gen_007.i3.zst.h5',
+    '40906960_gen_008.i3.zst.h5',
+    '40906960_gen_009.i3.zst.h5',
+    '40906960_gen_010.i3.zst.h5',
+    '40917491_gen_001.i3.zst.h5',
+    '40917491_gen_002.i3.zst.h5',
+    '40917491_gen_003.i3.zst.h5',
+    '40917491_gen_004.i3.zst.h5',
+    '40917491_gen_005.i3.zst.h5',
+    '40917491_gen_006.i3.zst.h5',
+    '40917491_gen_007.i3.zst.h5',
+    '40917491_gen_008.i3.zst.h5',
+    '40917491_gen_009.i3.zst.h5',
+    '40917491_gen_010.i3.zst.h5',
+
 ]
 
 # We will store the condensed versions of each file in this list
@@ -57,7 +75,7 @@ for file_name in file_list:
         all_condensed_data.append(condensed_file)
         
     except FileNotFoundError:
-        print(f"    [WARNING] Could not find {file_name}. Skipping...")
+        print(f"    [WARNING] Could not find {file_name}. popraw nazwe pliku")
 
 # =========================================================
 # 3. PREPARE THE MASTER DATASET
@@ -90,7 +108,7 @@ model = XGBClassifier(
     n_jobs=-1              # Uses all your Mac's CPU cores to train faster!
 )
 
-print("Training model... (You might hear your laptop fans spin up!)")
+print("Training model... ")
 model.fit(X_train, y_train)
 
 # =========================================================
@@ -105,4 +123,4 @@ print("=======================================================")
 print(classification_report(y_test, predictions, target_names=['Noise (0)', 'Muon Signal (1)']))
 
 # Note: In the future, we will calculate the 'density_feature' here before training 
-# to make the model significantly smarter!
+# to make the model significantly smarter!  
