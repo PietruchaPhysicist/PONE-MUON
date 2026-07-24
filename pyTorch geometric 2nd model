@@ -1,0 +1,179 @@
+"""
+pytorch geometric model
+"""
+import glob, os
+import pandas as pd
+import torch
+import torch.nn as nn
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+
+from evaluate import evaluate   # uploaded evaluate.py from prev work :)
+"""
+#note that the files(parquet) used were changed to incorporate the model geometry
+and rearranged by pulses. 
+"""
+# ---- EDIT THESE IF DESIRED ----
+PARQUET_DIR = "/content/drive/MyDrive/poneh5data/parquet"
+OUTPUT_DIR = "/content/drive/MyDrive/poneh5data/mlp_output"
+EPOCHS = 50 #excessive amount of epochs but stpps when no improvement
+BATCH_SIZE = 1024 #num of samp processsed during each training
+LR = 1e-3 # learning rate, how much models weights get adjusted wrt loss gradient
+VAL_FRAC = 0.15 #15% for validation data set
+TEST_FRAC = 0.15#also 15% for training, v important to keep separate to prevent leakage
+PATIENCE = 5 #for early stopping if no improvement in 5 epochs
+SEED = 42 # to ensure consistance across runs
+MAX_PARQUET_FILES_TO_LOAD = 5 # ADDED to Limit the number of parquet files bc all ram was used. ideally run on all 20
+# ---------------------
+
+FEATURES = ["dom_x", "dom_y", "dom_z", "dom_time", "dom_time_residual", "charge"]
+TARGET = "is_signal"
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+"""
+had to add stuff to actually make the code run:( 
+result is  that less datafiles were used, can ignore if better CPU etc
+"""
+print("Collecting event numbers for splitting...")
+# First, get all unique event_no and their original file paths to ensure consistent splitting
+all_event_nos = []
+files = sorted(glob.glob(os.path.join(PARQUET_DIR, "*.parquet")))
+
+# Limit the number of files processed to conserve memory.
+if MAX_PARQUET_FILES_TO_LOAD > 0:
+    print(f"  Limiting to {MAX_PARQUET_FILES_TO_LOAD} parquet files for memory reasons.")
+    files = files[:MAX_PARQUET_FILES_TO_LOAD]
+
+print(f"  Processing {len(files)} parquet files.")
+
+for f_path in files:
+    # Read only 'event_no' column to minimize memory usage
+    temp_df_events = pd.read_parquet(f_path, columns=["event_no"])
+    all_event_nos.extend(temp_df_events["event_no"].unique().tolist())
+
+# Get unique event numbers across all files
+events = pd.Series(all_event_nos).unique()
+print(f"Found {len(events)} unique events across the selected files.")
+
+# Split event numbers into train, validation, and test sets
+train_events, temp_events = train_test_split(events, test_size=VAL_FRAC + TEST_FRAC, random_state=SEED)
+val_events, test_events = train_test_split(temp_events, test_size=TEST_FRAC / (VAL_FRAC + TEST_FRAC), random_state=SEED)
+
+# Now, load the actual data for each split separately, filtering by event_no to reduce memory
+
+print("Loading training data...")
+train_data_frames = []
+for f_path in files:
+    temp_df = pd.read_parquet(f_path, columns=["event_no"] + FEATURES + [TARGET])
+    train_data_frames.append(temp_df[temp_df.event_no.isin(train_events)])
+train_df = pd.concat(train_data_frames, ignore_index=True)
+del train_data_frames # Free up memory as soon as possible
+
+print("Loading validation data...")
+val_data_frames = []
+for f_path in files:
+    temp_df = pd.read_parquet(f_path, columns=["event_no"] + FEATURES + [TARGET])
+    val_data_frames.append(temp_df[temp_df.event_no.isin(val_events)])
+val_df = pd.concat(val_data_frames, ignore_index=True)
+del val_data_frames # Free up memory
+
+print("Loading testing data...")
+test_data_frames = []
+for f_path in files:
+    temp_df = pd.read_parquet(f_path, columns=["event_no"] + FEATURES + [TARGET])
+    test_data_frames.append(temp_df[temp_df.event_no.isin(test_events)])
+test_df = pd.concat(test_data_frames, ignore_index=True)
+del test_data_frames # Free up memory
+
+print(f"  train: {len(train_df)} pulses / {len(train_events)} events ({train_df[TARGET].mean():.3%} signal)")
+print(f"  val:   {len(val_df)} pulses / {len(val_events)} events ({val_df[TARGET].mean():.3%} signal)")
+print(f"  test:  {len(test_df)} pulses / {len(test_events)} events ({test_df[TARGET].mean():.3%} signal)")
+
+scaler = StandardScaler().fit(train_df[FEATURES].values) # fit scaler only on training data to prevent leakage
+
+def to_tensors(d):
+    X = torch.tensor(scaler.transform(d[FEATURES].values), dtype=torch.float32, device=device)
+    y = torch.tensor(d[TARGET].values, dtype=torch.float32, device=device).unsqueeze(1)
+    return X, y
+
+X_train, y_train = to_tensors(train_df)
+X_val, y_val = to_tensors(val_df)
+X_test, y_test = to_tensors(test_df)
+
+train_ds = torch.utils.data.TensorDataset(X_train, y_train)
+train_loader = torch.utils.data.DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+
+n_pos = train_df[TARGET].sum()
+n_neg = len(train_df) - n_pos
+pos_weight = torch.tensor(n_neg / max(n_pos, 1), dtype=torch.float32, device=device)
+#since the signal is so rare, assign higher penalty to misclassifying signals
+print(f"pos_weight = {pos_weight.item():.2f}")
+
+"""
+trainig the neural network sequence of nn.Linear,
+nn.ReLU for introduction non_linearity, nn.Dropout layer to prevent overfitting,
+hidden parameter specifies number of neurons in each layer.
+final nn.Linear outputs single value for binary classifiction.
+"""
+class GeometricMLP(nn.Module):
+    def __init__(self, n_features, hidden=(64, 32, 16), dropout=0.1):
+        super().__init__()
+        layers, in_dim = [], n_features
+        for h in hidden:
+            layers += [nn.Linear(in_dim, h), nn.ReLU(), nn.Dropout(dropout)]
+            in_dim = h
+        layers += [nn.Linear(in_dim, 1)]
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+model = GeometricMLP(len(FEATURES)).to(device)
+criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)#loss function
+optimizer = torch.optim.Adam(model.parameters(), lr=LR)#Adam adjusts models weights and biases during training
+
+#for the epoch iteration 
+best_val_loss, best_state, no_improve = float("inf"), None, 0
+for epoch in range(EPOCHS):
+    model.train()
+    train_loss = 0.0
+    for bx, by in train_loader:
+        optimizer.zero_grad()
+        loss = criterion(model(bx), by)
+        loss.backward()
+        optimizer.step()
+        train_loss += loss.item() * len(bx)
+    train_loss /= len(train_ds)
+
+    model.eval()
+    with torch.no_grad():
+        val_loss = criterion(model(X_val), y_val).item()#to monitor performance 
+    print(f"Epoch {epoch + 1}/{EPOCHS} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f}")
+
+    if val_loss < best_val_loss:
+        best_val_loss, best_state, no_improve = val_loss, {k: v.clone() for k, v in model.state_dict().items()}, 0
+    else:
+        no_improve += 1
+        if no_improve >= PATIENCE:
+            print("Early stopping")
+            break
+
+model.load_state_dict(best_state)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+model.eval()
+with torch.no_grad():
+    test_probs = torch.sigmoid(model(X_test).squeeze(1)).cpu().numpy()
+
+results = pd.DataFrame({
+    "event_no": test_df["event_no"].values,
+    "is_signal": test_df[TARGET].values,
+    "signal_probability": test_probs,
+})
+results.to_csv(os.path.join(OUTPUT_DIR, "pulse_predictions.csv"), index=False)
+torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, "mlp_state_dict.pth"))
+print(f"Saved predictions + model to {OUTPUT_DIR}")
+
+#monitor plots and metrics from read from imported file
+evaluate(os.path.join(OUTPUT_DIR, "pulse_predictions.csv"), os.path.join(OUTPUT_DIR, "eval"))
